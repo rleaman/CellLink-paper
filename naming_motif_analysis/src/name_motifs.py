@@ -1,6 +1,7 @@
 import json
 import logging
 from collections import Counter
+from collections.abc import Mapping
 import random
 import math
 
@@ -132,13 +133,15 @@ class NameMotifParser:
         parser._parser_status("load()")
         return parser
 
-    def _create_term_dict(self, updated_term_text, original_term_text, term_source):
+    def _create_term_dict(
+        self, updated_term_text, original_term_text, term_source, term_count=1
+    ):
         PerformanceProfiler.start("NameMotifParser._create_term_dict()")
         term_dict = dict()
         term_dict["term"] = updated_term_text
         term_dict["original_term_text"] = original_term_text
         term_dict["source_count"] = Counter()
-        term_dict["source_count"][term_source] += 1
+        term_dict["source_count"][term_source] += term_count
         doc = self.nlp(updated_term_text)
         term_dict["doc"] = doc
         tokens = [token.text for token in doc]
@@ -151,15 +154,20 @@ class NameMotifParser:
         PerformanceProfiler.start("NameMotifParser.add_terms()")
         if self.term2dict == None:
             self.term2dict = dict()
-        for term_text in term_texts:
+        term_items = (
+            term_texts.items()
+            if isinstance(term_texts, Mapping)
+            else ((term_text, 1) for term_text in term_texts)
+        )
+        for term_text, term_count in term_items:
             PerformanceProfiler.start("NameMotifParser.add_terms()@loop")
             updated_term_text = self.name_part_updater.update(term_text)
             if updated_term_text in self.term2dict:
-                self.term2dict[updated_term_text]["source_count"][term_source] += 1
+                self.term2dict[updated_term_text]["source_count"][term_source] += term_count
                 PerformanceProfiler.end("NameMotifParser.add_terms()@loop")
                 continue
             term_dict = self._create_term_dict(
-                updated_term_text, term_text, term_source
+                updated_term_text, term_text, term_source, term_count
             )
             self.term2dict[updated_term_text] = term_dict
             PerformanceProfiler.end("NameMotifParser.add_terms()@loop")
@@ -394,6 +402,34 @@ class NameMotifParser:
             predictions.sort(key=lambda x: x[1])
             term_dict["predictions"] = predictions
             logging.debug(f"Predicting term \"{term}\": {predictions}")
+
+    def get_standoff_predictions(self, term_text):
+        if self.term2dict is None:
+            raise RuntimeError("Must run process() first")
+        updated_term_text = self.name_part_updater.update(term_text)
+        term_dict = self.term2dict.get(updated_term_text)
+        if term_dict is None:
+            logging.warning(f'MotifFinder could not process term "{term_text}"')
+            return []
+
+        doc = self.nlp(term_text)
+        if len(doc) != len(term_dict["tokens"]):
+            raise RuntimeError(
+                f'Tokenization changed while creating standoff predictions for "{term_text}"'
+            )
+
+        spans = []
+        for label, start, end in term_dict["predictions"]:
+            span = doc[start:end]
+            spans.append(
+                {
+                    "start": span.start_char,
+                    "end": span.end_char,
+                    "label": label,
+                    "text": span.text,
+                }
+            )
+        return spans
 
     def find_motifs(self, term_text):
         if self.term2dict is None:

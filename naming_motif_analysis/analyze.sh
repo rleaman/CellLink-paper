@@ -1,6 +1,6 @@
 set -e 
 
-CORPUS_DIR="***ADD THIS***"
+CORPUS_DIR="corpus"
 
 mkdir -p output
 

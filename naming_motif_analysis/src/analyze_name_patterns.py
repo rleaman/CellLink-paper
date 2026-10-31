@@ -1,3 +1,4 @@
+import ast
 import gzip
 import json
 import pathlib
@@ -17,6 +18,8 @@ from abbreviations import AbbreviationExpander
 import name_motifs
 import file_utils
 from multi_counter import MultiCounter
+
+DEFAULT_PREDICTION_SPANS_FILENAME = "output/predicted_name_motif_spans.json"
 
 # Configure basic logging from console
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s - %(message)s")
@@ -107,15 +110,25 @@ def main(argv=None):
         allowed_coordination_lengths={1},
     )
     mention_key2info = get_mention_info(ontology, annotations, filters)
+    mention_text_counts = Counter()
+    for (
+        mention_text,
+        _mention_type,
+        _identifier_list,
+    ), mention_dict in mention_key2info.items():
+        mention_text_counts[mention_text] += mention_dict["count"]
     parser = name_motifs.NameMotifParser.load(
         ontology,
-        [mention_text for mention_text, _mention_type, _identifier_list in mention_key2info.keys()],
+        mention_text_counts,
         args.name_motif_map_filename,
         args.term_cache_filename,
         args.vector_cache_filename,
     )
     if parser.tokseq2dict is None or parser.seq_label_counts is None:
         raise RuntimeError("parser not initialized")
+    normalized_term_annotations = get_normalized_term_annotations(
+        parser, mention_key2info
+    )
     tokseq_usage = Counter(
         [
             (seq_dict.get("usage_count", 0) > 0, seq_dict.get("label") is None)
@@ -139,6 +152,9 @@ def main(argv=None):
 
     count_and_print(filters, mention_key2info, motifs)
     load_and_analyze(filters, mention_key2info, args.lineage_analysis_filename, args.motif_analysis_filename)
+    write_prediction_spans(
+        parser, normalized_term_annotations, args.prediction_spans_filename
+    )
     if not args.examples_filename is None:
         prepare_and_output_examples(mention_key2info, parser, args.examples_filename, args.example_count)
     if args.cv_results_filename is not None:
@@ -193,6 +209,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=10,
         help="Number of CV folds (default=10).",
     )
+    p.add_argument(
+        "--prediction-spans",
+        dest="prediction_spans_filename",
+        default=DEFAULT_PREDICTION_SPANS_FILENAME,
+        help=f"Output filename for predicted standoff spans (default={DEFAULT_PREDICTION_SPANS_FILENAME}).",
+    )
 
     return p
 
@@ -241,6 +263,61 @@ def get_mention_info(ontology, annotations, filters):
             f"Mention info: mention: {expanded_text} type: {mention_type} identifiers {identifier_list} => count: {count} lineage_counts: {lineage_counts}"
         )
     return mention_key2info
+
+
+def get_normalized_term_annotations(parser, mention_key2info):
+    normalized_term_annotations = dict()
+    for (
+        mention_text,
+        mention_type,
+        identifier_list_string,
+    ), mention_dict in mention_key2info.items():
+        normalized_term = parser.name_part_updater.update(mention_text)
+        annotation_key = (mention_type, identifier_list_string)
+        if normalized_term not in normalized_term_annotations:
+            normalized_term_annotations[normalized_term] = Counter()
+        normalized_term_annotations[normalized_term][annotation_key] += mention_dict["count"]
+    return normalized_term_annotations
+
+
+def write_prediction_spans(parser, normalized_term_annotations, output_filename):
+    predictions = []
+    for term, term_dict in sorted(parser.term2dict.items()):
+        frequency = term_dict["source_count"].get("corpus", 0)
+        if frequency == 0:
+            continue
+        annotations = []
+        annotation_counts = normalized_term_annotations.get(term, Counter())
+        for (entity_type, identifier_list_string), count in sorted(
+            annotation_counts.items()
+        ):
+            annotations.append(
+                {
+                    "entity_type": entity_type,
+                    "identifier_list": ast.literal_eval(identifier_list_string),
+                    "frequency": count,
+                }
+            )
+        annotation_frequency = sum(
+            annotation["frequency"] for annotation in annotations
+        )
+        if annotation_frequency != frequency:
+            raise RuntimeError(
+                f'Annotation frequency {annotation_frequency} does not match corpus frequency {frequency} for "{term}"'
+            )
+        predictions.append(
+            {
+                "mention": term,
+                "frequency": frequency,
+                "annotations": annotations,
+                "spans": parser.get_standoff_predictions(term),
+            }
+        )
+    predictions.sort(key=lambda x: (-x["frequency"], x["mention"]))
+    logging.info(f"Writing predicted standoff spans to {output_filename}")
+    with open(output_filename, "w") as file:
+        json.dump(predictions, file, indent=2)
+        file.write("\n")
 
 
 def cross_validate(parser, cv_results_filename, cv_iter_count, cv_fold_count):

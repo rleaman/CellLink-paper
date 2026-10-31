@@ -1,3 +1,5 @@
 *model*
 !NER-exp2-multipleModels
 **__pycache__**
+*.log
+naming_motif_analysis/corpus/*

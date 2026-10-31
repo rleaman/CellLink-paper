@@ -158,9 +158,23 @@ Optional arguments:
 | ```--cv-results``` | Output filename for cross-validation results. If omitted, cross-validation is skipped. |
 | ```--cv-iter-count``` | Number of CV iterations (default=1) |
 | ```--cv-fold-count``` | Number of CV folds (default=10) |
+| ```--prediction-spans``` | Output filename for predicted mention spans (default=```output/predicted_name_motif_spans.json```) |
 
 ### Output
 Output files are written to the specified filenames. Example outputs are provided in the ```output/``` directory.
+
+The prediction span JSON contains each normalized corpus term, its corpus
+frequency, counted entity type and identifier-list annotations, and its
+predicted motif spans with character offsets, labels, and span text. To
+aggregate those predictions by span text and label, run:
+
+```
+python src/tally_predicted_spans.py
+```
+
+This writes ```output/predicted_span_label_frequencies.tsv``` by default.
+Use ```--mention-output``` to set the filename for the mention-and-span TSV,
+which defaults to ```output/predicted_name_motif_spans.tsv```.
 
 ## Citation
 If you use this code or the CellLink corpus, please cite the following paper:
